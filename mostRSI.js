@@ -1,5 +1,5 @@
 // mostRSI.js
-const { SMA, EMA, WMA, VWMA, RMA } = require('technicalindicators');
+const { SMA, EMA, WMA, VWMA } = require('technicalindicators');
 
 // Calculate RSI manually using RMA of gains and losses
 function rsi(source, length) {
@@ -13,8 +13,31 @@ function rsi(source, length) {
         losses.push(diff < 0 ? -diff : 0);
     }
 
-    const avgGain = RMA.calculate({ values: gains, period: length });
-    const avgLoss = RMA.calculate({ values: losses, period: length });
+    // Implement RMA calculation manually since it's not available
+    function calculateRMA(values, period) {
+        const result = [];
+        let sum = 0;
+        
+        // Calculate initial SMA
+        for (let i = 0; i < period; i++) {
+            sum += values[i] || 0;
+        }
+        
+        // First value is SMA
+        let prevRMA = sum / period;
+        result.push(prevRMA);
+        
+        // Calculate subsequent RMA values
+        for (let i = period; i < values.length; i++) {
+            prevRMA = (prevRMA * (period - 1) + values[i]) / period;
+            result.push(prevRMA);
+        }
+        
+        return result;
+    }
+
+    const avgGain = calculateRMA(gains, length);
+    const avgLoss = calculateRMA(losses, length);
 
     for (let i = 0; i < avgGain.length; i++) {
         const rs = avgLoss[i] === 0 ? 100 : avgGain[i] === 0 ? 0 : avgGain[i] / avgLoss[i];
@@ -71,7 +94,34 @@ function ma(type, source, length) {
         case 'EMA': return EMA.calculate({ period: length, values: source });
         case 'WMA': return WMA.calculate({ period: length, values: source });
         case 'VWMA': return VWMA.calculate({ period: length, values: source });
-        case 'SMMA': return RMA.calculate({ period: length, values: source });
+        case 'SMMA': {
+            // Implement SMMA (same as RMA) manually
+            function calculateRMA(values, period) {
+                const result = [];
+                let sum = 0;
+                
+                // Calculate initial SMA
+                for (let i = 0; i < period; i++) {
+                    sum += values[i] || 0;
+                }
+                
+                // First value is SMA
+                let prevRMA = sum / period;
+                result.push(prevRMA);
+                
+                // Calculate subsequent RMA values
+                for (let i = period; i < values.length; i++) {
+                    prevRMA = (prevRMA * (period - 1) + values[i]) / period;
+                    result.push(prevRMA);
+                }
+                
+                return result;
+            }
+            
+            const rmaValues = calculateRMA(source, length);
+            // Pad with nulls to match original length
+            return Array(source.length - rmaValues.length).fill(null).concat(rmaValues);
+        }
         case 'VAR': return varFunc(source, length); // custom
         default: return source;
     }
