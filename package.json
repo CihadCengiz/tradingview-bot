@@ -5,8 +5,8 @@
   "main": "index.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
-    "dev": "nodemon mostRSI-live.js",
-    "pm_b": "pm2 start npm --name 'tradingview-bot' -- dev --env"
+    "start": "node mostRSI-live.js",
+    "pm_b": "pm2 start npm --name 'tradingview-bot' -- start --env"
   },
   "keywords": [],
   "author": "",
