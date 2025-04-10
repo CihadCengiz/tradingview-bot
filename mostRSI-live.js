@@ -127,13 +127,11 @@ async function sendTelegramAlert(symbol, alertType, message) {
         sentAlerts[alertKey] &&
         Date.now() - sentAlerts[alertKey] < 60 * 60 * 1000
       ) {
-        console.log(`Duplicate alert skipped for ${symbol}: ${alertType}`);
         return;
       }
 
       // Send the message
       await botConfig.instance.sendMessage(chatId, message);
-      console.log(`${botType} Telegram alert sent for ${symbol}: ${alertType}`);
 
       // Mark this alert as sent
       sentAlerts[alertKey] = Date.now();
@@ -181,7 +179,6 @@ const candleBuffers = {};
 // Function to fetch all available USDT trading pairs from Binance
 async function fetchAllSymbols() {
   try {
-    console.log('Fetching all available trading pairs from Binance...');
     const response = await fetch('https://api.binance.com/api/v3/exchangeInfo');
     const data = await response.json();
 
@@ -198,7 +195,6 @@ async function fetchAllSymbols() {
       )
       .map((symbol) => symbol.symbol.toLowerCase());
 
-    console.log(`Found ${usdtPairs.length} USDT trading pairs`);
 
     // Limit the number of pairs to monitor to avoid rate limits
     // You can adjust this number based on your system's capabilities
@@ -244,7 +240,6 @@ async function initSymbol(symbol) {
 
   // Fetch historical data first
   try {
-    console.log(`[${symbol.toUpperCase()}] Fetching historical data...`);
     const response = await fetch(
       `https://api.binance.com/api/v3/klines?symbol=${symbol.toUpperCase()}&interval=${INTERVAL}&limit=${CANDLE_LIMIT}`
     );
@@ -261,11 +256,6 @@ async function initSymbol(symbol) {
     }));
 
     candleBuffers[symbol] = historicalCandles;
-    console.log(
-      `[${symbol.toUpperCase()}] Loaded ${
-        historicalCandles.length
-      } historical candles`
-    );
 
     // Calculate initial values
     updateMOST(symbol);
@@ -413,29 +403,6 @@ function updateMOST(symbol) {
   // Clear console for updates
   console.clear();
 
-  // Display status for all active symbols
-  for (const sym of SYMBOLS) {
-    if (candleBuffers[sym] && candleBuffers[sym].statusMessage) {
-      candleBuffers[sym].statusMessage.forEach((line) => console.log(line));
-    }
-  }
-
-  // Display all stored alerts for all symbols
-  console.log(`\n--- RECENT ALERTS ---`);
-  for (const sym of SYMBOLS) {
-    if (
-      candleBuffers[sym] &&
-      candleBuffers[sym].alerts &&
-      candleBuffers[sym].alerts.length > 0
-    ) {
-      console.log(`\n[${sym.toUpperCase()}] ALERTS:`);
-      candleBuffers[sym].alerts.forEach((alert) => {
-        console.log(alert);
-      });
-    }
-  }
-
-  console.log(`\nWaiting for new alerts...`);
 
   // Store last processed candle time to avoid duplicate alerts
   if (
