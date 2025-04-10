@@ -8,31 +8,31 @@ require('dotenv').config();
 const TELEGRAM_BOTS = {
   YUKSELEN: {
     token: process.env.YUKSELEN_KEY, // Replace with your bot token for YUKSELEN
-    chatId: '',
+    chatId: process.env.CHAT_ID,
     ready: false,
     instance: null,
   },
   DUSEN: {
     token: process.env.DUSEN_KEY, // Replace with your bot token for DUSEN
-    chatId: '',
+    chatId: process.env.CHAT_ID,
     ready: false,
     instance: null,
   },
   FARK: {
     token: process.env.FARK_KEY, // Replace with your bot token for FARK
-    chatId: '',
+    chatId: process.env.CHAT_ID,
     ready: false,
     instance: null,
   },
   DUSEN_KESISIM: {
     token: process.env.DUSEN_KESISIM_KEY, // Replace with your bot token for DUSEN_KESISIM
-    chatId: '',
+    chatId: process.env.CHAT_ID,
     ready: false,
     instance: null,
   },
   YUKSELEN_KESISIM: {
     token: process.env.YUKSELEN_KESISIM_KEY, // Replace with your bot token for YUKSELEN_KESISIM
-    chatId: '',
+    chatId: process.env.CHAT_ID,
     ready: false,
     instance: null,
   },
