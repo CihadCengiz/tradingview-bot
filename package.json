@@ -6,7 +6,7 @@
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
     "start": "node mostRSI-live.js",
-    "pm_b": "pm2 start npm --name 'tradingview-bot' -- start --env"
+    "pm_b": "pm2 start npm --name 'tradingview-bot' -- start --env --output /dev/null --error /dev/null"
   },
   "keywords": [],
   "author": "",
