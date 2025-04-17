@@ -345,10 +345,6 @@ async function initSymbol(symbol) {
     `wss://stream.binance.com:9443/ws/${symbol}@kline_${INTERVAL}`
   );
 
-  ws4h.on('open', () => {
-    console.log(`[${symbol.toUpperCase()}] 4h WebSocket connected.`);
-  });
-
   ws4h.on('message', (data) => {
     const json = JSON.parse(data);
     const k = json.k; // kline data object from Binance
@@ -392,10 +388,6 @@ async function initSymbol(symbol) {
     `wss://stream.binance.com:9443/ws/${symbol}@kline_${HOUR_INTERVAL}`
   );
 
-  ws1h.on('open', () => {
-    console.log(`[${symbol.toUpperCase()}] 1h WebSocket connected.`);
-  });
-
   ws1h.on('message', (data) => {
     const json = JSON.parse(data);
     const k = json.k; // kline data object from Binance
@@ -436,9 +428,6 @@ async function initSymbol(symbol) {
     `wss://stream.binance.com:9443/ws/${symbol}@kline_${LIVE_INTERVAL}`
   );
 
-  wsLive.on('open', () => {
-    console.log(`[${symbol.toUpperCase()}] Live price WebSocket connected.`);
-  });
 
   wsLive.on('message', (data) => {
     const json = JSON.parse(data);
@@ -461,11 +450,6 @@ function updateHourIndicators(symbol) {
     hourCandles.length <
     Math.max(CONFIG_TOP.rsiLength, CONFIG_BOTTOM.rsiLength) + 10
   ) {
-    console.log(
-      `[${symbol.toUpperCase()}] Waiting for more 1h data... (${
-        hourCandles.length
-      } candles)`
-    );
     return;
   }
 
@@ -633,7 +617,6 @@ function checkYukselenDusenAlerts(symbol) {
     state.yukselen.alertSent = true;
     
     // Log the state transition
-    console.log(`[${symbol.toUpperCase()}] YUKSELEN alert triggered: RSI went above 69, then below 50, then above 50 again`);
   }
   
   // Reset YUKSELEN state if RSI drops below 50 after alert
@@ -667,7 +650,6 @@ function checkYukselenDusenAlerts(symbol) {
     state.dusen.alertSent = true;
     
     // Log the state transition
-    console.log(`[${symbol.toUpperCase()}] DUSEN alert triggered: RSI went below 31, then above 50, then below 50 again`);
   }
   
   // Reset DUSEN state if RSI goes above 50 after alert
@@ -676,32 +658,6 @@ function checkYukselenDusenAlerts(symbol) {
     state.dusen.seenAbove50 = false;
     state.dusen.alertSent = false;
   }
-}
-
-// Function to display status in console
-function displayStatus() {
-  // Clear console for updates
-  console.clear();
-
-  // Display status for all active symbols
-  for (const sym of SYMBOLS) {
-    if (candleBuffers[sym] && candleBuffers[sym].statusMessage) {
-      candleBuffers[sym].statusMessage.forEach(line => console.log(line));
-    }
-  }
-  
-  // Display all stored alerts for all symbols
-  console.log(`\n--- RECENT ALERTS ---`);
-  for (const sym of SYMBOLS) {
-    if (candleBuffers[sym] && candleBuffers[sym].alerts && candleBuffers[sym].alerts.length > 0) {
-      console.log(`\n[${sym.toUpperCase()}] ALERTS:`);
-      candleBuffers[sym].alerts.forEach(alert => {
-        console.log(alert);
-      });
-    }
-  }
-  
-  console.log(`\nWaiting for new alerts...`);
 }
 
 // Function to fetch symbols from TradingView watchlist
@@ -770,11 +726,6 @@ function updateMOST(symbol) {
     candles.length <
     Math.max(CONFIG_TOP.rsiLength, CONFIG_BOTTOM.rsiLength) + 10
   ) {
-    console.log(
-      `[${symbol.toUpperCase()}] Waiting for more 4h data... (${
-        candles.length
-      } candles)`
-    );
     return;
   }
 
