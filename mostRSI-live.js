@@ -435,9 +435,6 @@ async function initSymbol(symbol) {
 
     // Update live price
     candleBuffers[symbol].livePrice = parseFloat(k.c);
-
-    // Display updated status
-    displayStatus();
   });
 }
 
