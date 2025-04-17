@@ -154,8 +154,30 @@ async function sendTelegramAlert(symbol, alertType, message) {
 }
 
 // We'll fetch all symbols from Binance
-let SYMBOLS = [];
-const INTERVAL = '30m'; // Binance interval
+let SYMBOLS = [
+  'btcusdt',
+  // 'ethusdt',
+  // 'solusdt',
+  // 'arkusdt',
+  // 'rareusdt',
+  // 'crvusdt',
+  // 'straxusdt',
+  // 'uftusdt',
+  // 'prosusdt',
+  // 'funusdt',
+  // 'stptusdt',
+  // 'ltousdt',
+  // 'cvcusdt',
+  // 'qkcusdt',
+  // 'ardrusdt',
+  // 'storjusdt',
+  // 'powrusdt',
+  // 'leverusdt',
+  // 'xrpusdt',
+];
+const INTERVAL = '4h'; // Binance interval for indicator calculation
+const LIVE_INTERVAL = '1m'; // Interval for real-time price updates
+const HOUR_INTERVAL = '1h'; // 1-hour interval for YUKSELEN and DUSEN alerts
 const CANDLE_LIMIT = 500; // Max candles to keep in memory per symbol
 const THRESHOLD = 1; // Alert threshold for difference in RSI or MOST
 
@@ -176,6 +198,9 @@ const CONFIG_BOTTOM = {
 // Store candle data for each symbol
 const candleBuffers = {};
 
+// Store state for tracking RSI movements
+const rsiStateTracking = {};
+
 // Function to fetch all available USDT trading pairs from Binance
 async function fetchAllSymbols() {
   try {
@@ -194,7 +219,6 @@ async function fetchAllSymbols() {
           !symbol.symbol.includes('BULL')
       )
       .map((symbol) => symbol.symbol.toLowerCase());
-
 
     // Limit the number of pairs to monitor to avoid rate limits
     // You can adjust this number based on your system's capabilities
@@ -237,8 +261,30 @@ async function fetchAllSymbols() {
 // Initialize WebSocket connection for each symbol
 async function initSymbol(symbol) {
   candleBuffers[symbol] = []; // Init empty array to store candle history
+  
+  // Initialize live price tracking
+  if (!candleBuffers[symbol].livePrice) {
+    candleBuffers[symbol].livePrice = null;
+  }
+  
+  // Initialize 1h candle buffer
+  candleBuffers[symbol].hourCandles = [];
+  
+  // Initialize state tracking for this symbol
+  rsiStateTracking[symbol] = {
+    yukselen: {
+      seenAbove69: false,
+      seenBelow50: false,
+      alertSent: false
+    },
+    dusen: {
+      seenBelow31: false,
+      seenAbove50: false,
+      alertSent: false
+    }
+  };
 
-  // Fetch historical data first
+  // Fetch historical data first for indicator calculation (4h)
   try {
     const response = await fetch(
       `https://api.binance.com/api/v3/klines?symbol=${symbol.toUpperCase()}&interval=${INTERVAL}&limit=${CANDLE_LIMIT}`
@@ -261,21 +307,49 @@ async function initSymbol(symbol) {
     updateMOST(symbol);
   } catch (error) {
     console.error(
-      `[${symbol.toUpperCase()}] Error fetching historical data:`,
+      `[${symbol.toUpperCase()}] Error fetching historical data (4h):`,
+      error.message
+    );
+  }
+  
+  // Fetch 1h historical data for YUKSELEN and DUSEN alerts
+  try {
+    const response = await fetch(
+      `https://api.binance.com/api/v3/klines?symbol=${symbol.toUpperCase()}&interval=${HOUR_INTERVAL}&limit=${CANDLE_LIMIT}`
+    );
+    const data = await response.json();
+
+    // Process historical candles
+    const historicalHourCandles = data.map((k) => ({
+      time: k[0],
+      open: parseFloat(k[1]),
+      high: parseFloat(k[2]),
+      low: parseFloat(k[3]),
+      close: parseFloat(k[4]),
+      volume: parseFloat(k[5]),
+    }));
+
+    candleBuffers[symbol].hourCandles = historicalHourCandles;
+
+    // Calculate initial 1h indicators
+    updateHourIndicators(symbol);
+  } catch (error) {
+    console.error(
+      `[${symbol.toUpperCase()}] Error fetching historical data (1h):`,
       error.message
     );
   }
 
-  // Now connect to WebSocket for real-time updates
-  const ws = new WebSocket(
+  // Connect to WebSocket for 4h candle updates
+  const ws4h = new WebSocket(
     `wss://stream.binance.com:9443/ws/${symbol}@kline_${INTERVAL}`
   );
 
-  ws.on('open', () => {
-    console.log(`[${symbol.toUpperCase()}] WebSocket connected.`);
+  ws4h.on('open', () => {
+    console.log(`[${symbol.toUpperCase()}] 4h WebSocket connected.`);
   });
 
-  ws.on('message', (data) => {
+  ws4h.on('message', (data) => {
     const json = JSON.parse(data);
     const k = json.k; // kline data object from Binance
 
@@ -303,12 +377,391 @@ async function initSymbol(symbol) {
       }
     }
 
+    // Update live price
+    candleBuffers[symbol].livePrice = parseFloat(k.c);
+
     // Calculate with every price update
     updateMOST(symbol);
+    
+    // Check for FARK alerts based on 4h data
+    checkFarkAlerts(symbol);
+  });
+  
+  // Connect to WebSocket for 1h candle updates
+  const ws1h = new WebSocket(
+    `wss://stream.binance.com:9443/ws/${symbol}@kline_${HOUR_INTERVAL}`
+  );
+
+  ws1h.on('open', () => {
+    console.log(`[${symbol.toUpperCase()}] 1h WebSocket connected.`);
+  });
+
+  ws1h.on('message', (data) => {
+    const json = JSON.parse(data);
+    const k = json.k; // kline data object from Binance
+
+    // Create formatted candle object with current data
+    const candle = {
+      time: k.t,
+      open: parseFloat(k.o),
+      high: parseFloat(k.h),
+      low: parseFloat(k.l),
+      close: parseFloat(k.c), // Current price
+      volume: parseFloat(k.v),
+    };
+
+    const hourCandles = candleBuffers[symbol].hourCandles;
+    const last = hourCandles[hourCandles.length - 1];
+
+    // Always update the last candle with live data
+    if (last && last.time === candle.time) {
+      hourCandles[hourCandles.length - 1] = candle;
+    } else {
+      // If it's a new candle, keep the previous one and add new
+      if (last) {
+        hourCandles.push(candle);
+        if (hourCandles.length > CANDLE_LIMIT) hourCandles.shift();
+      }
+    }
+
+    // Update 1h indicators
+    updateHourIndicators(symbol);
+    
+    // Check for YUKSELEN and DUSEN alerts based on 1h data
+    checkYukselenDusenAlerts(symbol);
+  });
+
+  // Connect to WebSocket for real-time price updates
+  const wsLive = new WebSocket(
+    `wss://stream.binance.com:9443/ws/${symbol}@kline_${LIVE_INTERVAL}`
+  );
+
+  wsLive.on('open', () => {
+    console.log(`[${symbol.toUpperCase()}] Live price WebSocket connected.`);
+  });
+
+  wsLive.on('message', (data) => {
+    const json = JSON.parse(data);
+    const k = json.k; // kline data object from Binance
+
+    // Update live price
+    candleBuffers[symbol].livePrice = parseFloat(k.c);
+
+    // Display updated status
+    displayStatus();
   });
 }
 
-// Compute and compare MOSTRSI for both configurations
+// New function to update 1h indicators
+function updateHourIndicators(symbol) {
+  const hourCandles = candleBuffers[symbol].hourCandles;
+
+  // Check if we have enough candles to calculate RSI
+  if (
+    hourCandles.length <
+    Math.max(CONFIG_TOP.rsiLength, CONFIG_BOTTOM.rsiLength) + 10
+  ) {
+    console.log(
+      `[${symbol.toUpperCase()}] Waiting for more 1h data... (${
+        hourCandles.length
+      } candles)`
+    );
+    return;
+  }
+
+  const close = hourCandles.map((c) => c.close);
+  const high = hourCandles.map((c) => c.high);
+  const low = hourCandles.map((c) => c.low);
+
+  // Compute RSI and RSI-MA for top and bottom config
+  const top = computeMOSTRSI({ close, high, low }, CONFIG_TOP);
+  const bottom = computeMOSTRSI({ close, high, low }, CONFIG_BOTTOM);
+
+  // Get the MA values directly from the lastRsiMa property
+  const topMA = top.lastRsiMa;
+  const bottomMA = bottom.lastRsiMa;
+
+  // Store the 1h indicators
+  candleBuffers[symbol].hourTopRSI = top.lastRSI;
+  candleBuffers[symbol].hourBottomRSI = bottom.lastRSI;
+  candleBuffers[symbol].hourTopMA = topMA;
+  candleBuffers[symbol].hourBottomMA = bottomMA;
+}
+
+// Function to check FARK alerts (based on 4h data)
+function checkFarkAlerts(symbol) {
+  // Skip if we don't have indicator values yet
+  if (!candleBuffers[symbol] || 
+      !candleBuffers[symbol].topRSI || 
+      !candleBuffers[symbol].bottomRSI) {
+    return;
+  }
+
+  const livePrice = candleBuffers[symbol].livePrice;
+  const top = {
+    lastRSI: candleBuffers[symbol].topRSI
+  };
+  const bottom = {
+    lastRSI: candleBuffers[symbol].bottomRSI
+  };
+  const topMA = candleBuffers[symbol].topMA;
+  const bottomMA = candleBuffers[symbol].bottomMA;
+  const lastCandle = candleBuffers[symbol].lastCandle;
+  
+  // Skip if we don't have all required values
+  if (!livePrice || !top.lastRSI || !bottom.lastRSI || !topMA || !bottomMA || !lastCandle) {
+    return;
+  }
+
+  // Calculate differences between indicators
+  const rsiDiff = Math.abs(top.lastRSI - bottom.lastRSI);
+  const maDiff = topMA && bottomMA ? Math.abs(topMA - bottomMA) : null;
+
+  // Format timestamp for display
+  const date = new Date();
+  const timeStr = date.toLocaleTimeString();
+  const dateStr = date.toLocaleDateString();
+
+  // Store alerts in a buffer instead of clearing console
+  if (!candleBuffers[symbol].alerts) {
+    candleBuffers[symbol].alerts = [];
+  }
+
+  // Check for alerts only if we haven't processed this price recently
+  const priceKey = Math.round(livePrice * 100) / 100; // Round to 2 decimals
+  if (
+    !candleBuffers[symbol].lastProcessedPrice ||
+    candleBuffers[symbol].lastProcessedPrice !== priceKey
+  ) {
+    // Check if RSI difference is less than or equal to threshold
+    if (rsiDiff <= THRESHOLD) {
+      const alertHeader = `\n[${symbol.toUpperCase()}] Tarih: ${dateStr} ${timeStr} - Fiyat: ${livePrice.toFixed(4)}`;
+      const alertRSI = `🔔 ##### MAVİ ##### 🔔\nÜST: ${top.lastRSI.toFixed(2)} / ALT: ${bottom.lastRSI.toFixed(2)}`;
+      
+      // Store the alert
+      candleBuffers[symbol].alerts.push(alertHeader);
+      candleBuffers[symbol].alerts.push(alertRSI);
+      
+      // Send Telegram alert
+      const telegramMessage = `${alertHeader}\n\n${alertRSI}`;
+      sendTelegramAlert(symbol, 'rsi_convergence', telegramMessage);
+    }
+    
+    // Check if MA difference is less than or equal to threshold
+    if (maDiff !== null && maDiff <= THRESHOLD) {
+      // Only add header if not already added by RSI alert
+      const alertHeader = rsiDiff > THRESHOLD ? 
+        `\n[${symbol.toUpperCase()}] Tarih: ${dateStr} ${timeStr} - Fiyat: ${livePrice.toFixed(4)}` : '';
+      
+      if (rsiDiff > THRESHOLD) {
+        candleBuffers[symbol].alerts.push(alertHeader);
+      }
+      
+      const alertMA = `🔔 ##### KIRMIZI ##### 🔔\nÜST: ${topMA.toFixed(2)} / ALT: ${bottomMA.toFixed(2)}`;
+      
+      // Store the alert
+      candleBuffers[symbol].alerts.push(alertMA);
+      
+      // Send Telegram alert
+      const telegramMessage = `${alertHeader}\n\n${alertMA}`;
+      sendTelegramAlert(symbol, 'ma_convergence', telegramMessage);
+    }
+    
+    // Update the last processed price
+    candleBuffers[symbol].lastProcessedPrice = priceKey;
+  }
+}
+
+// Function to check YUKSELEN and DUSEN alerts (based on 1h data)
+function checkYukselenDusenAlerts(symbol) {
+  // Skip if we don't have 1h indicator values yet
+  if (!candleBuffers[symbol] || 
+      !candleBuffers[symbol].hourTopRSI || 
+      !candleBuffers[symbol].hourBottomRSI) {
+    return;
+  }
+
+  const livePrice = candleBuffers[symbol].livePrice;
+  const top = {
+    lastRSI: candleBuffers[symbol].hourTopRSI
+  };
+  const bottom = {
+    lastRSI: candleBuffers[symbol].hourBottomRSI
+  };
+  const topMA = candleBuffers[symbol].hourTopMA;
+  const bottomMA = candleBuffers[symbol].hourBottomMA;
+  
+  // Skip if we don't have all required values
+  if (!livePrice || !top.lastRSI || !bottom.lastRSI || !topMA || !bottomMA) {
+    return;
+  }
+
+  // Format timestamp for display
+  const date = new Date();
+  const timeStr = date.toLocaleTimeString();
+  const dateStr = date.toLocaleDateString();
+
+  // Store alerts in a buffer instead of clearing console
+  if (!candleBuffers[symbol].alerts) {
+    candleBuffers[symbol].alerts = [];
+  }
+
+  // Get state tracking for this symbol
+  const state = rsiStateTracking[symbol];
+  
+  // YUKSELEN state tracking logic (above 69 → below 50 → above 50)
+  if (top.lastRSI > 69) {
+    state.yukselen.seenAbove69 = true;
+  } 
+  else if (state.yukselen.seenAbove69 && top.lastRSI < 50) {
+    state.yukselen.seenBelow50 = true;
+  }
+  else if (state.yukselen.seenAbove69 && state.yukselen.seenBelow50 && top.lastRSI > 50 && !state.yukselen.alertSent) {
+    // All conditions met, send YUKSELEN alert
+    const alertHeader = `\n[${symbol.toUpperCase()}] Tarih: ${dateStr} ${timeStr} - Fiyat: ${livePrice.toFixed(4)}`;
+    const alertMsg = `⚠️ ##### YÜKSELEN ##### ⚠️\nÜST MAVİ: (${top.lastRSI.toFixed(2)}) | KIRMIZI: (${topMA.toFixed(2)})\nALT MAVİ: (${bottom.lastRSI.toFixed(2)}) | KIRMIZI: (${bottomMA.toFixed(2)})`;
+    
+    // Store the alert
+    candleBuffers[symbol].alerts.push(alertHeader);
+    candleBuffers[symbol].alerts.push(alertMsg);
+    
+    // Send Telegram alert with type
+    const telegramMessage = `${alertHeader}\n\n${alertMsg}`;
+    sendTelegramAlert(symbol, 'overbought', telegramMessage);
+    
+    // Mark alert as sent
+    state.yukselen.alertSent = true;
+    
+    // Log the state transition
+    console.log(`[${symbol.toUpperCase()}] YUKSELEN alert triggered: RSI went above 69, then below 50, then above 50 again`);
+  }
+  
+  // Reset YUKSELEN state if RSI drops below 50 after alert
+  if (state.yukselen.alertSent && top.lastRSI < 50) {
+    state.yukselen.seenAbove69 = false;
+    state.yukselen.seenBelow50 = false;
+    state.yukselen.alertSent = false;
+  }
+  
+  // DUSEN state tracking logic (below 31 → above 50 → below 50)
+  if (top.lastRSI < 31) {
+    state.dusen.seenBelow31 = true;
+  } 
+  else if (state.dusen.seenBelow31 && top.lastRSI > 50) {
+    state.dusen.seenAbove50 = true;
+  }
+  else if (state.dusen.seenBelow31 && state.dusen.seenAbove50 && top.lastRSI < 50 && !state.dusen.alertSent) {
+    // All conditions met, send DUSEN alert
+    const alertHeader = `\n[${symbol.toUpperCase()}] Tarih: ${dateStr} ${timeStr} - Fiyat: ${livePrice.toFixed(4)}`;
+    const alertMsg = `⚠️ ##### DÜŞEN ##### ⚠️ \nÜST MAVİ: (${top.lastRSI.toFixed(2)}) | KIRMIZI: (${topMA.toFixed(2)})\nALT MAVİ: (${bottom.lastRSI.toFixed(2)}) | KIRMIZI: (${bottomMA.toFixed(2)})`;
+    
+    // Store the alert
+    candleBuffers[symbol].alerts.push(alertHeader);
+    candleBuffers[symbol].alerts.push(alertMsg);
+    
+    // Send Telegram alert with type
+    const telegramMessage = `${alertHeader}\n\n${alertMsg}`;
+    sendTelegramAlert(symbol, 'oversold', telegramMessage);
+    
+    // Mark alert as sent
+    state.dusen.alertSent = true;
+    
+    // Log the state transition
+    console.log(`[${symbol.toUpperCase()}] DUSEN alert triggered: RSI went below 31, then above 50, then below 50 again`);
+  }
+  
+  // Reset DUSEN state if RSI goes above 50 after alert
+  if (state.dusen.alertSent && top.lastRSI > 50) {
+    state.dusen.seenBelow31 = false;
+    state.dusen.seenAbove50 = false;
+    state.dusen.alertSent = false;
+  }
+}
+
+// Function to display status in console
+function displayStatus() {
+  // Clear console for updates
+  console.clear();
+
+  // Display status for all active symbols
+  for (const sym of SYMBOLS) {
+    if (candleBuffers[sym] && candleBuffers[sym].statusMessage) {
+      candleBuffers[sym].statusMessage.forEach(line => console.log(line));
+    }
+  }
+  
+  // Display all stored alerts for all symbols
+  console.log(`\n--- RECENT ALERTS ---`);
+  for (const sym of SYMBOLS) {
+    if (candleBuffers[sym] && candleBuffers[sym].alerts && candleBuffers[sym].alerts.length > 0) {
+      console.log(`\n[${sym.toUpperCase()}] ALERTS:`);
+      candleBuffers[sym].alerts.forEach(alert => {
+        console.log(alert);
+      });
+    }
+  }
+  
+  console.log(`\nWaiting for new alerts...`);
+}
+
+// Function to fetch symbols from TradingView watchlist
+async function fetchTradingViewSymbols() {
+  try {
+    console.log('Using hardcoded watchlist symbols...');
+    
+    // Hardcoded watchlist from TradingView
+    const watchlistString = "BINANCE:RVNUSDT,BINANCE:ZILUSDT,BINANCE:GALAUSDT,BINANCE:ACHUSDT,BINANCE:UTKUSDT,BINANCE:ACAUSDT,BINANCE:OGNUSDT,BINANCE:AUDIOUSDT,BINANCE:OXTUSDT,BINANCE:REQUSDT,BINANCE:TKOUSDT,BINANCE:DOGEUSDT,BINANCE:IOTAUSDT,BINANCE:MINAUSDT,BINANCE:XLMUSDT,BINANCE:MANAUSDT,BINANCE:DIAUSDT,BINANCE:SUSDT,BINANCE:ADAUSDT,BINANCE:XRPUSDT,###GENEL,BINANCE:SCUSDT,BINANCE:PEOPLEUSDT,BINANCE:REZUSDT,BINANCE:FIOUSDT,BINANCE:TUSDT,BINANCE:SUNUSDT,BINANCE:ANKRUSDT,BINANCE:IOTXUSDT,BINANCE:REIUSDT,BINANCE:SKLUSDT,BINANCE:ARPAUSDT,BINANCE:IDEXUSDT,BINANCE:WAXPUSDT,BINANCE:VETUSDT,BINANCE:ROSEUSDT,BINANCE:ASTRUSDT,BINANCE:ALPHAUSDT,BINANCE:MDTUSDT,BINANCE:TRUUSDT,BINANCE:SYSUSDT,BINANCE:MBOXUSDT,BINANCE:GMTUSDT,BINANCE:MAVUSDT,BINANCE:ZKUSDT,BINANCE:HFTUSDT,BINANCE:ATAUSDT,BINANCE:CHESSUSDT,BINANCE:C98USDT,BINANCE:LOKAUSDT,BINANCE:CTSIUSDT,BINANCE:DFUSDT,BINANCE:WOOUSDT,BINANCE:RAREUSDT,BINANCE:ENJUSDT,BINANCE:CFXUSDT,BINANCE:COTIUSDT,BINANCE:DUSKUSDT,BINANCE:GRTUSDT,BINANCE:ADXUSDT,BINANCE:CHRUSDT,BINANCE:LRCUSDT,BINANCE:BICOUSDT,BINANCE:BLURUSDT,BINANCE:PHAUSDT,BINANCE:WANUSDT,BINANCE:EDUUSDT,BINANCE:CVCUSDT,BINANCE:BAKEUSDT,BINANCE:NTRNUSDT,BINANCE:KMDUSDT,BINANCE:BATUSDT,BINANCE:FISUSDT,BINANCE:ONTUSDT,BINANCE:POLYXUSDT,BINANCE:YGGUSDT,BINANCE:JOEUSDT,BINANCE:HBARUSDT,BINANCE:1INCHUSDT,BINANCE:SEIUSDT,BINANCE:POWRUSDT,BINANCE:SCRTUSDT,BINANCE:ALGOUSDT,BINANCE:ONGUSDT,BINANCE:OSMOUSDT,BINANCE:SXPUSDT,BINANCE:FLUXUSDT,BINANCE:HIVEUSDT,BINANCE:GTCUSDT,BINANCE:ZRXUSDT,BINANCE:SANDUSDT,BINANCE:PUNDIXUSDT,BINANCE:STORJUSDT,BINANCE:ARBUSDT,BINANCE:CELOUSDT,BINANCE:CTKUSDT,BINANCE:KNCUSDT,BINANCE:FLOWUSDT,BINANCE:BNTUSDT,BINANCE:ALICEUSDT,BINANCE:IMXUSDT,BINANCE:APEUSDT,BINANCE:KAVAUSDT,BINANCE:ARKMUSDT,BINANCE:FETUSDT,BINANCE:XTZUSDT,BINANCE:AVAUSDT,BINANCE:SUPERUSDT,BINANCE:DYDXUSDT,BINANCE:STXUSDT,BINANCE:CRVUSDT,OKX:PIUSDT,BINANCE:EOSUSDT,BINANCE:SNXUSDT,BINANCE:THETAUSDT,BINANCE:OPUSDT,BINANCE:BANDUSDT,BINANCE:LDOUSDT,BINANCE:WLDUSDT,BINANCE:API3USDT,BINANCE:BELUSDT,BINANCE:TWTUSDT,BINANCE:MTLUSDT,BINANCE:PYRUSDT,BINANCE:UMAUSDT,BINANCE:NEXOUSDT,BINANCE:RUNEUSDT,BINANCE:NEARUSDT,BINANCE:SUIUSDT,BINANCE:RAYUSDT,BINANCE:ZROUSDT,BINANCE:FILUSDT,###İZLEME LİSTESİNDE,BINANCE:FLMUSDT,BINANCE:VOXELUSDT";
+    
+    // Split the string by commas
+    const rawSymbols = watchlistString.split(',');
+    
+    // Filter out non-symbol entries (like section headers that start with ###)
+    const validSymbols = rawSymbols
+      .filter(item => !item.startsWith('###'))
+      .map(symbol => {
+        // Remove exchange prefix and convert to lowercase
+        return symbol.replace(/^(BINANCE:|OKX:)/, '').toLowerCase();
+      })
+      .filter(symbol => symbol.endsWith('usdt')); // Ensure we only have USDT pairs
+    
+    console.log(`Successfully processed ${validSymbols.length} symbols from hardcoded watchlist`);
+    
+    // Update the SYMBOLS array
+    SYMBOLS = validSymbols;
+    return SYMBOLS;
+  } catch (error) {
+    console.error('Error processing hardcoded symbols, using defaults:', error.message);
+    console.log('Falling back to default symbols');
+    return SYMBOLS;
+  }
+}
+
+// Start monitoring for each symbol
+async function startMonitoring() {
+  // First fetch symbols from hardcoded watchlist
+  try {
+    await fetchTradingViewSymbols();
+  } catch (error) {
+    console.error('Error fetching symbols from watchlist, using defaults:', error.message);
+  }
+  
+  // If watchlist fetch failed or returned empty, fetch from Binance
+  if (SYMBOLS.length <= 1) {
+    console.log('No symbols from watchlist, fetching from Binance instead');
+    await fetchAllSymbols();
+  }
+
+  // Then initialize each symbol with a delay to avoid rate limits
+  for (const symbol of SYMBOLS) {
+    await initSymbol(symbol);
+    // Increased delay between initializing each symbol to avoid rate limits
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+  }
+}
+
+startMonitoring();
+
+// Function to update MOST indicators for 4h data
 function updateMOST(symbol) {
   const candles = candleBuffers[symbol];
 
@@ -318,15 +771,12 @@ function updateMOST(symbol) {
     Math.max(CONFIG_TOP.rsiLength, CONFIG_BOTTOM.rsiLength) + 10
   ) {
     console.log(
-      `[${symbol.toUpperCase()}] Waiting for more data... (${
+      `[${symbol.toUpperCase()}] Waiting for more 4h data... (${
         candles.length
       } candles)`
     );
     return;
   }
-
-  // Get the last candle for alert calculations
-  const lastCandle = candles[candles.length - 1];
 
   const close = candles.map((c) => c.close);
   const high = candles.map((c) => c.high);
@@ -339,31 +789,14 @@ function updateMOST(symbol) {
   // Get the MA values directly from the lastRsiMa property
   const topMA = top.lastRsiMa;
   const bottomMA = bottom.lastRsiMa;
-
-  // Check if we have valid RSI and RSI-MA values
-  if (
-    top.lastRSI === null ||
-    bottom.lastRSI === null ||
-    topMA === null ||
-    bottomMA === null
-  ) {
-    console.log(`[${symbol.toUpperCase()}] Waiting for valid RSI/MA values...`);
-    return;
-  }
-
-  // Calculate differences between indicators
-  const rsiDiff = Math.abs(top.lastRSI - bottom.lastRSI);
-  const maDiff = topMA && bottomMA ? Math.abs(topMA - bottomMA) : null;
+  
+  // Get the last candle for price information
+  const lastCandle = candles[candles.length - 1];
 
   // Format timestamp for display
   const date = new Date(lastCandle.time);
   const timeStr = date.toLocaleTimeString();
   const dateStr = date.toLocaleDateString();
-
-  // Store alerts in a buffer instead of clearing console
-  if (!candleBuffers[symbol].alerts) {
-    candleBuffers[symbol].alerts = [];
-  }
 
   // Create status message for this symbol
   const statusMessage = [
@@ -378,232 +811,13 @@ function updateMOST(symbol) {
     }): ${bottom.lastRSI.toFixed(2)} | MA: ${
       bottomMA ? bottomMA.toFixed(2) : 'N/A'
     }`,
-    `Differences: RSI Δ${rsiDiff.toFixed(2)} | MA Δ${
-      maDiff ? maDiff.toFixed(2) : 'N/A'
-    }`,
   ];
-
-  // Display crossover status
-  const topCrossStatus = topMA
-    ? top.lastRSI > topMA
-      ? 'RSI > MA (Bullish)'
-      : 'RSI < MA (Bearish)'
-    : 'MA not available';
-  const bottomCrossStatus = bottomMA
-    ? bottom.lastRSI > bottomMA
-      ? 'RSI > MA (Bullish)'
-      : 'RSI < MA (Bearish)'
-    : 'MA not available';
-  statusMessage.push(`Top Status: ${topCrossStatus}`);
-  statusMessage.push(`Bottom Status: ${bottomCrossStatus}`);
 
   // Store the current status
   candleBuffers[symbol].statusMessage = statusMessage;
-
-  // Clear console for updates
-  console.clear();
-
-
-  // Store last processed candle time to avoid duplicate alerts
-  if (
-    !candleBuffers[symbol].lastProcessedTime ||
-    candleBuffers[symbol].lastProcessedTime !== lastCandle.time
-  ) {
-    // Check for high RSI values (above 69)
-    const topRSIHigh = top.lastRSI > 69;
-
-    // Check for low RSI values (below 31)
-    const topRSILow = top.lastRSI < 31;
-
-    if (topRSIHigh) {
-      const alertHeader = `\n[${symbol.toUpperCase()}] Tarih: ${dateStr} ${timeStr}`;
-
-      let alertMsg = '';
-      if (topRSIHigh) {
-        alertMsg = `⚠️ ##### YÜKSELEN ##### ⚠️\nÜST MAVİ: (${top.lastRSI.toFixed(
-          2
-        )}) | KIRMIZI: (${topMA.toFixed(
-          2
-        )})\nALT MAVİ: (${bottom.lastRSI.toFixed(
-          2
-        )}) | KIRMIZI: (${bottomMA.toFixed(2)})`;
-      }
-
-      // Store the alert
-      candleBuffers[symbol].alerts.push(alertMsg);
-      candleBuffers[symbol].alerts.push(alertHeader);
-
-      // Send Telegram alert with type
-      const telegramMessage = `${alertHeader}\n\n${alertMsg}`;
-      sendTelegramAlert(symbol, 'overbought', telegramMessage);
-    }
-
-    // New alert for low RSI values (below 31)
-    if (topRSILow) {
-      const alertHeader = `\n[${symbol.toUpperCase()}] Tarih: ${dateStr} ${timeStr}`;
-
-      let alertMsg = '';
-      if (topRSILow) {
-        alertMsg = `⚠️ ##### DÜŞEN ##### ⚠️ \nÜST MAVİ: (${top.lastRSI.toFixed(
-          2
-        )}) | KIRMIZI: (${topMA.toFixed(
-          2
-        )})\nALT MAVİ: (${bottom.lastRSI.toFixed(
-          2
-        )}) | KIRMIZI: (${bottomMA.toFixed(2)})`;
-      }
-
-      // Store the alert
-      candleBuffers[symbol].alerts.push(alertMsg);
-      candleBuffers[symbol].alerts.push(alertHeader);
-
-      // Send Telegram alert with type
-      const telegramMessage = `${alertHeader}\n\n${alertMsg}`;
-      sendTelegramAlert(symbol, 'oversold', telegramMessage);
-    }
-
-    // Check if RSI difference is less than or equal to threshold
-    if (rsiDiff <= THRESHOLD) {
-      const alertHeader = `\n[${symbol.toUpperCase()}] Tarih: ${dateStr} ${timeStr}`;
-      const alertRSI = `🔔 ##### MAVİ ##### 🔔\nÜST: ${top.lastRSI.toFixed(
-        2
-      )} / ALT: ${bottom.lastRSI.toFixed(2)}`;
-
-      // Store the alert
-      candleBuffers[symbol].alerts.push(alertHeader);
-      candleBuffers[symbol].alerts.push(alertRSI);
-
-      // Send Telegram alert
-      const telegramMessage = `${alertHeader}\n\n${alertRSI}`;
-      sendTelegramAlert(symbol, 'rsi_convergence', telegramMessage);
-    }
-
-    // Check if MA difference is less than or equal to threshold
-    if (maDiff !== null && maDiff <= THRESHOLD) {
-      // Only add header if not already added by RSI alert
-      const alertHeader =
-        rsiDiff > THRESHOLD
-          ? `\n[${symbol.toUpperCase()}] Tarih: ${dateStr} ${timeStr}`
-          : '';
-
-      if (rsiDiff > THRESHOLD) {
-        candleBuffers[symbol].alerts.push(alertHeader);
-      }
-
-      const alertMA = `🔔 ##### KIRMIZI ##### 🔔\nÜST: ${topMA.toFixed(
-        2
-      )} / ALT: ${bottomMA.toFixed(2)}`;
-
-      // Store the alert
-      candleBuffers[symbol].alerts.push(alertMA);
-
-      // Send Telegram alert
-      const telegramMessage = `${alertHeader}\n\n${alertMA}`;
-      sendTelegramAlert(symbol, 'ma_convergence', telegramMessage);
-    }
-
-    // Check for RSI and MA crossovers within each indicator
-    const topRSICrossedAboveMA =
-      topMA &&
-      candleBuffers[symbol].prevTopMA &&
-      top.lastRSI > topMA &&
-      candleBuffers[symbol].prevTopRSI < candleBuffers[symbol].prevTopMA;
-
-    const topRSICrossedBelowMA =
-      topMA &&
-      candleBuffers[symbol].prevTopMA &&
-      top.lastRSI < topMA &&
-      candleBuffers[symbol].prevTopRSI > candleBuffers[symbol].prevTopMA;
-
-    // Check for RSI crossing above MA (bullish signal)
-    if (topRSICrossedAboveMA) {
-      // Only add header if not already added by other alerts
-      if (rsiDiff > THRESHOLD && maDiff > THRESHOLD && !topRSIHigh) {
-        const alertHeader = `\n[${symbol.toUpperCase()}] Tarih: ${dateStr} ${timeStr}`;
-        candleBuffers[symbol].alerts.push(alertHeader);
-      }
-
-      if (topRSICrossedAboveMA) {
-        const crossMsg = `🚀 ##### ÜST GRAFİK YUKARI KESTİ ##### 🚀\nÜST MAVİ: (${top.lastRSI.toFixed(
-          2
-        )}) | KIRMIZI: (${topMA.toFixed(
-          2
-        )})\nALT MAVİ: (${bottom.lastRSI.toFixed(
-          2
-        )}) | KIRMIZI: (${bottomMA.toFixed(2)})`;
-        candleBuffers[symbol].alerts.push(crossMsg);
-
-        // Send Telegram alert
-        const alertHeader = `\n[${symbol.toUpperCase()}] Tarih: ${dateStr} ${timeStr}`;
-        sendTelegramAlert(
-          symbol,
-          'top_bullish_cross',
-          `${alertHeader}\n${crossMsg}`
-        );
-      }
-    }
-
-    // Check for RSI crossing below MA (bearish signal)
-    if (topRSICrossedBelowMA) {
-      // Only add header if not already added by other alerts
-      if (
-        rsiDiff > THRESHOLD &&
-        maDiff > THRESHOLD &&
-        !topRSIHigh &&
-        !topRSICrossedAboveMA
-      ) {
-        const alertHeader = `\n[${symbol.toUpperCase()}] Tarih: ${dateStr} ${timeStr}`;
-        candleBuffers[symbol].alerts.push(alertHeader);
-      }
-
-      if (topRSICrossedBelowMA) {
-        const crossMsg = `📉 ÜST GRAFİK AŞAĞI KESTİ:\nÜST MAVİ: (${top.lastRSI.toFixed(
-          2
-        )}) | KIRMIZI: (${topMA.toFixed(
-          2
-        )})\nALT MAVİ: (${bottom.lastRSI.toFixed(
-          2
-        )}) | KIRMIZI: (${bottomMA.toFixed(2)})`;
-        candleBuffers[symbol].alerts.push(crossMsg);
-
-        // Send Telegram alert
-        const alertHeader = `\n[${symbol.toUpperCase()}] Tarih: ${dateStr} ${timeStr}`;
-        sendTelegramAlert(
-          symbol,
-          'top_bearish_cross',
-          `${alertHeader}\n${crossMsg}`
-        );
-      }
-    }
-
-    // Store current values for next comparison
-    candleBuffers[symbol].prevTopRSI = top.lastRSI;
-    candleBuffers[symbol].prevTopMA = topMA;
-    candleBuffers[symbol].prevBottomRSI = bottom.lastRSI;
-    candleBuffers[symbol].prevBottomMA = bottomMA;
-
-    // At the end of the alert processing, limit the number of stored alerts
-    // Keep only the most recent 30 lines of alerts
-    if (candleBuffers[symbol].alerts.length > 30) {
-      candleBuffers[symbol].alerts = candleBuffers[symbol].alerts.slice(-30);
-    }
-
-    // Update the last processed time
-    candleBuffers[symbol].lastProcessedTime = lastCandle.time;
-  }
+  candleBuffers[symbol].topRSI = top.lastRSI;
+  candleBuffers[symbol].bottomRSI = bottom.lastRSI;
+  candleBuffers[symbol].topMA = topMA;
+  candleBuffers[symbol].bottomMA = bottomMA;
+  candleBuffers[symbol].lastCandle = lastCandle;
 }
-
-// Start monitoring for each symbol
-async function startMonitoring() {
-  // First fetch all available symbols
-  await fetchAllSymbols();
-
-  // Then initialize each symbol with a delay to avoid rate limits
-  for (const symbol of SYMBOLS) {
-    await initSymbol(symbol);
-    // Increased delay between initializing each symbol to avoid rate limits
-    await new Promise((resolve) => setTimeout(resolve, 1000));
-  }
-}
-
-startMonitoring();

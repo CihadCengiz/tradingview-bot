@@ -6,6 +6,7 @@
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
     "start": "node mostRSI-live.js",
+    "dev": "nodemon mostRSI-live.js",
     "pm_b": "pm2 start npm --name 'tradingview-bot' -- start --env --output /dev/null --error /dev/null"
   },
   "keywords": [],
@@ -15,6 +16,7 @@
     "dotenv": "^16.4.7",
     "node-fetch": "^3.3.2",
     "node-telegram-bot-api": "^0.66.0",
+    "puppeteer": "^24.6.1",
     "qrcode-terminal": "^0.12.0",
     "technicalindicators": "^3.1.0",
     "whatsapp-web.js": "^1.27.0",
