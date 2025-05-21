@@ -1,9 +1,18 @@
 // mostRSI-live.js
 const { computeMOSTRSI } = require('./mostRSI'); // Import the indicator calculation logic
-const { SYMBOLS, ALERT_INTERVALS, CANDLE_LIMIT, CONFIG_RSI_7_MA_7, CONFIG_RSI_21 } = require('./config');
+const {
+  SYMBOLS,
+  ALERT_INTERVALS,
+  CANDLE_LIMIT,
+  CONFIG_RSI_7_MA_7,
+  CONFIG_RSI_21,
+  // Import new retry configurations
+  MAX_FETCH_RETRIES,
+  FETCH_RETRY_DELAY_MS,
+} = require('./config');
 const { candleData, indicatorData, sentAlerts } = require('./data');
 const { createWebSocket } = require('./websocket');
-const { checkDifferenceAlert, checkBullishCrossover1d, checkBearishCrossover1h } = require('./alerts');
+const { checkDifferenceAlert } = require('./alerts');
 
 // Initialize data structures for each symbol and interval
 function initializeSymbol(symbol) {
@@ -17,97 +26,107 @@ function initializeSymbol(symbol) {
   }
 }
 
-// Function to fetch historical data for a specific symbol and interval
+// Function to fetch historical data for a specific symbol and interval with retries
 async function fetchHistoricalData(symbol, interval) {
-  try {
-    const response = await fetch(
-      `https://api.binance.com/api/v3/klines?symbol=${symbol.toUpperCase()}&interval=${interval}&limit=${CANDLE_LIMIT}`
-    );
-    const data = await response.json();
+  const url = `https://api.binance.com/api/v3/klines?symbol=${symbol.toUpperCase()}&interval=${interval}&limit=${CANDLE_LIMIT}`;
+  let retries = 0;
 
-    // Check if data is an array (successful response) or an error object
-    if (!Array.isArray(data)) {
-      console.error(`[${symbol.toUpperCase()}] Error fetching historical data (${interval}): ${JSON.stringify(data)}`);
-      // Skip this interval for this symbol
-      return;
-    }
+  while (retries < MAX_FETCH_RETRIES) {
+    try {
+      const response = await fetch(url);
+      const data = await response.json();
 
-    // Process historical candles
-    const historicalCandles = data.map((k) => ({
-      time: k[0],
-      open: parseFloat(k[1]),
-      high: parseFloat(k[2]),
-      low: parseFloat(k[3]),
-      close: parseFloat(k[4]),
-      volume: parseFloat(k[5]),
-      isFinal: true, // Historical data is always final
-    }));
-
-    candleData[symbol][interval] = historicalCandles;
-    console.log(`[${symbol.toUpperCase()}:${interval}] Fetched ${historicalCandles.length} historical candles.`);
-
-    // Calculate initial indicators after fetching historical data
-    calculateIndicators(symbol, interval);
-
-    // Connect to WebSocket stream after historical data is fetched
-    const wsUrl = `wss://stream.binance.com:9443/ws/${symbol}@kline_${interval}`;
-    const wsHandler = (data) => {
-      const json = JSON.parse(data);
-      const k = json.k; // kline data object from Binance
-
-      // Create formatted candle object
-      const candle = {
-        time: k.t,
-        open: parseFloat(k.o),
-        high: parseFloat(k.h),
-        low: parseFloat(k.l),
-        close: parseFloat(k.c), // Current price
-        volume: parseFloat(k.v),
-        isFinal: k.x, // k.x indicates if the candle is closed (final)
-      };
-
-      const candles = candleData[symbol][interval];
-      const last = candles[candles.length - 1];
-
-      // Update the last candle if it's the same time, otherwise add a new one
-      if (last && last.time === candle.time) {
-        candles[candles.length - 1] = candle;
-      } else {
-        // If it's a new candle, add it and remove the oldest if over limit
-        if (last) { // Only push if there's at least one historical candle
-           candles.push(candle);
-           if (candles.length > CANDLE_LIMIT) candles.shift();
+      // Check if data is an array (successful response) or an error object
+      if (!Array.isArray(data)) {
+        console.error(
+          `[${symbol.toUpperCase()}] Attempt ${retries + 1}/${MAX_FETCH_RETRIES}: Error fetching historical data (${interval}): ${JSON.stringify(data)}`
+        );
+        retries++;
+        if (retries < MAX_FETCH_RETRIES) {
+          console.log(`[${symbol.toUpperCase()}] Retrying in ${FETCH_RETRY_DELAY_MS}ms...`);
+          await new Promise(resolve => setTimeout(resolve, FETCH_RETRY_DELAY_MS));
         } else {
-            // This case should ideally not happen if historical data fetch was successful
-            // But as a fallback, add the first candle received
-            candles.push(candle);
+          console.error(`[${symbol.toUpperCase()}] Max retries reached for historical data (${interval}). Skipping.`);
+          return; // Give up after max retries
         }
+      } else {
+        // Process historical candles (successful fetch)
+        const historicalCandles = data.map((k) => ({
+          time: k[0],
+          open: parseFloat(k[1]),
+          high: parseFloat(k[2]),
+          low: parseFloat(k[3]),
+          close: parseFloat(k[4]),
+          volume: parseFloat(k[5]),
+          isFinal: true, // Historical data is always final
+        }));
+
+        candleData[symbol][interval] = historicalCandles;
+        console.log(`[${symbol.toUpperCase()}:${interval}] Fetched ${historicalCandles.length} historical candles.`);
+
+        // Calculate initial indicators after fetching historical data
+        calculateIndicators(symbol, interval);
+
+        // Connect to WebSocket stream after historical data is fetched
+        const wsUrl = `wss://stream.binance.com:9443/ws/${symbol}@kline_${interval}`;
+        const wsHandler = (data) => {
+          const json = JSON.parse(data);
+          const k = json.k; // kline data object from Binance
+
+          // Create formatted candle object
+          const candle = {
+            time: k.t,
+            open: parseFloat(k.o),
+            high: parseFloat(k.h),
+            low: parseFloat(k.l),
+            close: parseFloat(k.c), // Current price
+            volume: parseFloat(k.v),
+            isFinal: k.x, // k.x indicates if the candle is closed (final)
+          };
+
+          const candles = candleData[symbol][interval];
+          const last = candles[candles.length - 1];
+
+          // Update the last candle if it's the same time, otherwise add a new one
+          if (last && last.time === candle.time) {
+            candles[candles.length - 1] = candle;
+          } else {
+            // If it's a new candle, add it and remove the oldest if over limit
+            if (last) { // Only push if there's at least one historical candle
+               candles.push(candle);
+               if (candles.length > CANDLE_LIMIT) candles.shift();
+            } else {
+                // This case should ideally not happen if historical data fetch was successful
+                // But as a fallback, add the first candle received
+                candles.push(candle);
+            }
+          }
+
+          // Calculate indicators after updating candles
+          calculateIndicators(symbol, interval);
+
+          // Check alerts based on the updated indicators for this interval
+          checkDifferenceAlert(symbol, interval);
+        };
+
+        // Create WebSocket connection with reconnection logic
+        createWebSocket(wsUrl, wsHandler, `${interval} kline`, symbol); // Pass symbol to createWebSocket
+        return; // Exit loop on successful fetch
       }
-
-      // Calculate indicators after updating candles
-      calculateIndicators(symbol, interval);
-
-      // Check alerts based on the updated indicators for this interval
-      checkDifferenceAlert(symbol, interval);
-
-      // Check crossover alerts (only for specific intervals)
-      if (interval === '1d') {
-          checkBullishCrossover1d(symbol);
-      }
-      if (interval === '1h') {
-          checkBearishCrossover1h(symbol);
-      }
-    };
-
-    // Create WebSocket connection with reconnection logic
-    createWebSocket(wsUrl, wsHandler, `${interval} kline`, symbol); // Pass symbol to createWebSocket
-  } catch (error) {
-    console.error(
-        `[${symbol.toUpperCase()}] Error fetching historical data (${interval}):`,
+    } catch (error) {
+      console.error(
+        `[${symbol.toUpperCase()}] Attempt ${retries + 1}/${MAX_FETCH_RETRIES}: Error fetching historical data (${interval}):`,
         error.message
       );
-      // Skip this interval for this symbol
-      return;
+      retries++;
+      if (retries < MAX_FETCH_RETRIES) {
+        console.log(`[${symbol.toUpperCase()}] Retrying in ${FETCH_RETRY_DELAY_MS}ms...`);
+        await new Promise(resolve => setTimeout(resolve, FETCH_RETRY_DELAY_MS));
+      } else {
+        console.error(`[${symbol.toUpperCase()}] Max retries reached for historical data (${interval}). Skipping.`);
+        return; // Give up after max retries
+      }
+    }
   }
 }
 
@@ -141,8 +160,6 @@ function calculateIndicators(symbol, interval) {
     };
 
     indicatorData[symbol][interval] = currentIndicatorData;
-
-    // console.log(`[${symbol.toUpperCase()}:${interval}] Indicators calculated. RSI(21): ${indicatorData[symbol][interval].rsi21?.toFixed(2)}, MA(7): ${indicatorData[symbol][interval].rsi7ma7?.toFixed(2)}`);
 }
 
 
