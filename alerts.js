@@ -22,8 +22,8 @@ function checkDifferenceAlert(symbol, interval) {
         return;
     }
 
-    // Check the conditions: absolute difference <= 1 AND (rsi7ma7 >= 40 OR rsi21 >= 40)
-    if (Math.abs(rsi7ma7 - rsi21) <= 1 && (rsi7ma7 >= 40 || rsi21 >= 40)) {
+    // Check the conditions: absolute difference <= 1 AND (rsi7ma7 >= 50 AND rsi21 >= 50)
+    if (Math.abs(rsi7ma7 - rsi21) <= 1 && (rsi7ma7 >= 50 && rsi21 >= 50)) {
         const alertType = 'difference_alert';
         // Cooldown check is now handled inside sendTelegramAlert
 
