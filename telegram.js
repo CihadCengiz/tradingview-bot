@@ -2,7 +2,6 @@
 const TelegramBot = require('node-telegram-bot-api');
 // Import all specific keys and the chat ID
 const {
-  TELEGRAM_CHAT_ID, // Import chat ID
   DIFF_ALERT_1H_KEY,
   DIFF_ALERT_4H_KEY,
   DIFF_ALERT_1D_KEY,
@@ -112,20 +111,6 @@ async function sendTelegramAlert(symbol, alertType, message, interval) {
   }
 
   try {
-    // Check cooldown before sending
-    // Update alertKey to include interval for difference alerts
-    const alertKey = `${symbol}_${alertType}_${interval}`; // Added interval to key for cooldown tracking
-    const now = Date.now();
-    const { sentAlerts } = require('./data'); // Import here to get the latest state
-    const { ALERT_COOLDOWN_MS } = require('./config'); // Import here to get the latest state
-
-    if (
-      sentAlerts[alertKey] &&
-      now - sentAlerts[alertKey] < ALERT_COOLDOWN_MS
-    ) {
-      return;
-    }
-
     // Use the specific bot instance and the single chat ID
     await bot.sendMessage(config.TELEGRAM_CHAT_ID, message, {
       // Use config.TELEGRAM_CHAT_ID
@@ -136,7 +121,6 @@ async function sendTelegramAlert(symbol, alertType, message, interval) {
     );
 
     // Update last sent time
-    sentAlerts[alertKey] = now;
   } catch (error) {
     console.error(
       `[${symbol.toUpperCase()}] Error sending Telegram alert for ${alertType} (${interval}) using token ${tokenName}:`,

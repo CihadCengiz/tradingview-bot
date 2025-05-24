@@ -2,8 +2,7 @@
 const { computeMOSTRSI } = require('./mostRSI'); // Import the indicator calculation logic
 const { checkDifferenceAlert } = require('./alerts'); // Import alert checking functions
 const { createWebSocket } = require('./websocket'); // Import WebSocket creation function
-const { candleData, indicatorData, sentAlerts } = require('./data'); // Import data storage
-const { sendTelegramAlert } = require('./telegram'); // Import Telegram alert function
+const { candleData, indicatorData } = require('./data'); // Import data storage
 const {
   SYMBOLS,
   SYMBOL_INTERVALS, // Import the new symbol-specific intervals object
@@ -70,7 +69,6 @@ async function fetchHistoricalData(symbol, interval) {
 async function initializeSymbol(symbol) {
   candleData[symbol] = {};
   indicatorData[symbol] = {};
-  sentAlerts[symbol] = {}; // Initialize sentAlerts for the symbol
 
   // Get intervals for the current symbol, default to 'default' if not specified
   const intervals = SYMBOL_INTERVALS[symbol] || SYMBOL_INTERVALS['default'];
