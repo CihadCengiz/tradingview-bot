@@ -51,7 +51,7 @@ async function fetchHistoricalData(symbol, interval) {
 
       // After fetching historical data, calculate initial indicators and check alerts
       calculateIndicators(symbol, interval);
-      checkDifferenceAlert(symbol, interval); // Check alerts based on historical data
+      // checkDifferenceAlert(symbol, interval); // Check alerts based on historical data
 
       return; // Success, exit retry loop
     } catch (error) {
