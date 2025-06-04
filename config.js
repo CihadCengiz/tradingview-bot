@@ -16,9 +16,9 @@ const SYMBOLS = SYMBOLS_STRING.split(',')
 
 // Define intervals per symbol
 const SYMBOL_INTERVALS = {
-  ethusdt: ['1m', '15m', '30m'],
+  ethusdt: ['15m', '30m'],
   // Default intervals for all other symbols
-  default: ['1m', '1h', '4h', '1d'],
+  default: ['1h', '4h', '1d'],
 };
 
 // Candle limit for historical data fetching
@@ -40,7 +40,6 @@ const CONFIG_RSI_21 = {
 
 // Telegram Bot Configuration
 const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
-const DIFF_ALERT_1M_KEY = process.env.DIFF_ALERT_1H_KEY;
 const DIFF_ALERT_1H_KEY = process.env.DIFF_ALERT_1H_KEY;
 const DIFF_ALERT_4H_KEY = process.env.DIFF_ALERT_4H_KEY;
 const DIFF_ALERT_1D_KEY = process.env.DIFF_ALERT_1D_KEY;
@@ -63,5 +62,4 @@ module.exports = {
   ETH_DIFF_ALERT_KEY,
   MAX_FETCH_RETRIES,
   FETCH_RETRY_DELAY_MS,
-  DIFF_ALERT_1M_KEY
 };
