@@ -17,7 +17,6 @@ const {
 // Store WebSocket instances
 const websockets = {};
 
-// Function to fetch historical candle data
 // Function to fetch historical kline data from Binance API
 async function fetchHistoricalData(symbol, interval) {
   // Remove 'BINANCE:' prefix if it exists
@@ -114,7 +113,7 @@ function calculateIndicators(symbol, interval) {
     // Need at least enough candles for the largest RSI length + MA length
     const requiredCandles = Math.max(CONFIG_RSI_7_MA_7.rsiLength + CONFIG_RSI_7_MA_7.maLength, CONFIG_RSI_21.rsiLength + CONFIG_RSI_21.maLength) + 10; // Add buffer
     if (!candles || candles.length < requiredCandles) {
-        // console.log(`[${symbol.toUpperCase()}:${interval}] Not enough candles (${candles?.length || 0}/${requiredCandles}) to calculate indicators.`);
+        console.log(`[${symbol.toUpperCase()}:${interval}] Not enough candles (${candles?.length || 0}/${requiredCandles}) to calculate indicators.`);
         return;
     }
 
@@ -135,14 +134,15 @@ function calculateIndicators(symbol, interval) {
         rsi21: indicators21.lastRSI, // Assuming you want the last RSI value for RSI(21)
     };
 
-    // console.log(`[${symbol.toUpperCase()}:${interval}] Indicators calculated. RSI(7) MA(5): ${indicatorData[symbol][interval].rsi7ma7}, RSI(21): ${indicatorData[symbol][interval].rsi21}`);
+    console.log(`[${symbol.toUpperCase()}:${interval}] Indicators calculated. RSI(7) MA(5): ${indicatorData[symbol][interval].rsi7ma7}, RSI(21): ${indicatorData[symbol][interval].rsi21}`);
 }
 
 // Function to handle WebSocket messages
 function handleWebSocketMessage(symbol, interval, data) {
+  const parsedData = JSON.parse(data);
   // Check if the message is a kline event and contains kline data
-  if (data && data.e === 'kline' && data.k) {
-    const kline = data.k;
+  if (parsedData && parsedData.e === 'kline' && parsedData.k) {
+    const kline = parsedData.k;
 
     // Only process if the candle is closed
     if (kline.x) { // 'x' is the boolean indicating if the candle is closed
@@ -173,6 +173,6 @@ function handleWebSocketMessage(symbol, interval, data) {
     }
   } else {
     // Optionally log other message types for debugging
-    // console.log(`[${symbol.toUpperCase()}:${interval}] Received non-kline message:`, data);
+    console.log(`[${symbol.toUpperCase()}:${interval}] Received non-kline message:`, parsedData);
   }
 }

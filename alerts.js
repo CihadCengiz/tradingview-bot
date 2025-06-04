@@ -35,7 +35,7 @@ function checkDifferenceAlert(symbol, interval) {
       4
     )}`;
     // Updated message to reflect RSI(7) MA(5) and RSI(21)
-    const alertMsg = `🔔 ##### FARK ALARMI ##### 🔔\nRSI(7) MA(5): ${rsi7ma7.toFixed(
+    const alertMsg = `🔔 ##### FARK ALARMI ##### 🔔\nRSI(7): ${rsi7ma7.toFixed(
       2
     )} / RSI(21): ${rsi21.toFixed(2)}\nFark: ${Math.abs(
       rsi7ma7 - rsi21
